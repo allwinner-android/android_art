@@ -83,9 +83,11 @@ class ProfileSaver {
   bool ProcessProfilingInfo(
         bool force_save,
         bool skip_class_and_method_fetching,
-        /*out*/uint16_t* number_of_new_methods)
+        /*out*/uint16_t* number_of_new_methods,bool startup)
       REQUIRES(!Locks::profiler_lock_)
       REQUIRES(!Locks::mutator_lock_);
+
+
 
   void NotifyJitActivityInternal() REQUIRES(!wait_lock_);
   void WakeUpSaver() REQUIRES(wait_lock_);
@@ -122,6 +124,8 @@ class ProfileSaver {
   static ProfileSaver* instance_ GUARDED_BY(Locks::profiler_lock_);
   // Profile saver thread.
   static pthread_t profiler_pthread_ GUARDED_BY(Locks::profiler_lock_);
+
+  static bool pgo_immediately_enable;//AW_code;droidboost enable control;jiangbin;200917
 
   jit::JitCodeCache* jit_code_cache_;
 

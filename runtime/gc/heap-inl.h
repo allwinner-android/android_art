@@ -140,8 +140,22 @@ inline mirror::Object* Heap::AllocObjectWithAllocator(Thread* self,
       no_suspend_pre_fence_visitor(obj, usable_size);
       QuasiAtomic::ThreadFenceForConstructor();
     } else {
-      obj = TryToAllocate<kInstrumented, false>(self, allocator, byte_count, &bytes_allocated,
-                                                &usable_size, &bytes_tl_bulk_allocated);
+
+    /*AW_code;check launchmode for allocate for performance;jiangbin;191026*/
+    //bool growlimit = false;
+    if(GetHeapLaunchMode()) {
+        obj = TryToAllocate<kInstrumented, true>(self, allocator, byte_count, &bytes_allocated,
+                                              &usable_size, &bytes_tl_bulk_allocated);
+    } else {
+        obj = TryToAllocate<kInstrumented, false>(self, allocator, byte_count, &bytes_allocated,
+                                              &usable_size, &bytes_tl_bulk_allocated);
+    }
+       /*end*/
+
+
+
+
+
       if (UNLIKELY(obj == nullptr)) {
         // AllocateInternalWithGc internally re-allows, and can cause, thread suspension, if
         // someone instruments the entrypoints or changes the allocator in a suspend point here,
@@ -431,6 +445,27 @@ inline mirror::Object* Heap::TryToAllocate(Thread* self,
   return ret;
 }
 
+/*AW_code;add launchmode check allocated-byte by limit-threshold;jiangbin;191026*/
+#define GROWTH_LIMIT_UTILIZA 0.6f
+inline bool Heap::CheckCanConcurrentGC(size_t new_num_bytes_allocated) {
+
+    if(GetHeapLaunchMode()) {
+        if( new_num_bytes_allocated >=  (growth_limit_ * GetTargetHeapUtilization() * GROWTH_LIMIT_UTILIZA)) {
+            VLOG(gc) << " Heap::CheckCanConcurrentGCinLaunchMode need skip, growth*util= "
+            << growth_limit_ * GetTargetHeapUtilization() * GROWTH_LIMIT_UTILIZA;
+            SetHeapLaunchMode(false);
+            return true;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+/*end*/
+
+
+
+
 inline bool Heap::ShouldAllocLargeObject(ObjPtr<mirror::Class> c, size_t byte_count) const {
   // We need to have a zygote space or else our newly allocated large object can end up in the
   // Zygote resulting in it being prematurely freed.
@@ -454,7 +489,8 @@ inline bool Heap::IsOutOfMemoryOnAllocation(AllocatorType allocator_type,
       return true;
     }
     // We are between target_footprint_ and growth_limit_ .
-    if (AllocatorMayHaveConcurrentGC(allocator_type) && IsGcConcurrent()) {
+    if (AllocatorMayHaveConcurrentGC(allocator_type) && IsGcConcurrent()
+        && !(GetHeapLaunchMode() && grow)) {/*AW_code;for performance do not gc-to-alloc;jiangbin;191026*/
       return false;
     } else {
       if (grow) {
@@ -471,7 +507,16 @@ inline bool Heap::IsOutOfMemoryOnAllocation(AllocatorType allocator_type,
 }
 
 inline bool Heap::ShouldConcurrentGCForJava(size_t new_num_bytes_allocated) {
-  // For a Java allocation, we only check whether the number of Java allocated bytes excceeds a
+
+    /*AW_code;for performance check in launchmode;jiangbin;191026*/
+     if(!CheckCanConcurrentGC(new_num_bytes_allocated)) {
+         SetNeedJavaGCTask(true);
+         return false;
+     }
+    /*end*/
+
+
+   // For a Java allocation, we only check whether the number of Java allocated bytes excceeds a
   // threshold. By not considering native allocation here, we (a) ensure that Java heap bounds are
   // maintained, and (b) reduce the cost of the check here.
   return new_num_bytes_allocated >= concurrent_start_bytes_;

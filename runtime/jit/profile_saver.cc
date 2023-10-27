@@ -43,12 +43,26 @@
 #include "profile/profile_compilation_info.h"
 #include "scoped_thread_state_change-inl.h"
 
+
+/*AW_code;pgo-immediately;jiangbin;200917*/
+#include <sys/file.h>
+#include <sys/wait.h>
+#include "android-base/file.h"
+#include "base/scoped_flock.h"
+
+#include <android-base/properties.h>
+/*end*/
+
+
+
 namespace art {
 
 using Hotness = ProfileCompilationInfo::MethodHotness;
 
 ProfileSaver* ProfileSaver::instance_ = nullptr;
 pthread_t ProfileSaver::profiler_pthread_ = 0U;
+
+bool ProfileSaver::pgo_immediately_enable = false;
 
 static_assert(ProfileCompilationInfo::kIndividualInlineCacheSize ==
               InlineCache::kIndividualCacheSize,
@@ -154,6 +168,28 @@ void ProfileSaver::Run() {
 
   FetchAndCacheResolvedClassesAndMethods(/*startup=*/ true);
 
+  /*AW_CODE; save startup hot-profile ahead ;jiangbin;200917*/
+  if(std::string(android::base::GetProperty("persist.sys.droidboost.disable", "0")) == "0") {
+     pgo_immediately_enable = true;
+     VLOG(profiler) << "droidboost enable";
+  } else {
+     pgo_immediately_enable = false;
+     VLOG(profiler) << "droidboost disable";
+  }
+  if(pgo_immediately_enable && options_.GetWaitForJitNotificationsToSave()) {
+    uint16_t number_of_new_start_methods = 0;
+    bool start_profile_saved_to_disk = ProcessProfilingInfo(true,true, &number_of_new_start_methods,true);
+    if(start_profile_saved_to_disk && (number_of_new_start_methods !=0)) {
+
+        //reserve
+       VLOG(profiler) << "startup-save profile " ;
+
+    }
+  }
+/*end*/
+
+
+
   // When we save without waiting for JIT notifications we use a simple
   // exponential back off policy bounded by max_wait_without_jit.
   uint32_t max_wait_without_jit = options_.GetMinSavePeriodMs() * 16;
@@ -216,7 +252,7 @@ void ProfileSaver::Run() {
     bool profile_saved_to_disk = ProcessProfilingInfo(
         /*force_save=*/ false,
         /*skip_class_and_method_fetching=*/ force_early_first_save,
-        &number_of_new_methods);
+        &number_of_new_methods,false);
 
     // Reset the flag, so we can continue on the normal schedule.
     force_early_first_save = false;
@@ -430,7 +466,8 @@ class ProfileSaver::GetClassesAndMethodsHelper {
                                                     const ProfileSaverOptions& options) {
     Runtime* runtime = Runtime::Current();
     if (startup) {
-      const bool is_low_ram = runtime->GetHeap()->IsLowMemoryMode();
+      const bool is_low_ram = /*pgo_immediately_enable? false:*/runtime->GetHeap()->IsLowMemoryMode();//AW_code;pgo-immediately;jiangbin
+
       return options.GetHotStartupMethodSamples(is_low_ram);
     } else if (runtime->GetJit() != nullptr) {
       return runtime->GetJit()->WarmMethodThreshold();
@@ -823,7 +860,7 @@ void ProfileSaver::FetchAndCacheResolvedClassesAndMethods(bool startup) {
 bool ProfileSaver::ProcessProfilingInfo(
         bool force_save,
         bool skip_class_and_method_fetching,
-        /*out*/uint16_t* number_of_new_methods) {
+        /*out*/uint16_t* number_of_new_methods,bool startup/*AW_code;extend*/) {
   ScopedTrace trace(__PRETTY_FUNCTION__);
 
   // Resolve any new registered locations.
@@ -859,6 +896,49 @@ bool ProfileSaver::ProcessProfilingInfo(
     const std::set<std::string>& locations = it.second;
     VLOG(profiler) << "Tracked filename " << filename << " locations "
                    << android::base::Join(locations, ":");
+
+
+    /*AW_CODE; startup hot-profile check for launch-bdo ;jiangbin;200917*/
+    if(pgo_immediately_enable && startup){
+      bool needclear = false;
+
+      MutexLock mu(Thread::Current(), *Locks::profiler_lock_);
+      auto info_it = profile_cache_.find(filename);
+      if (info_it  != profile_cache_.end()) {
+          ProfileCompilationInfo* cached_info = info_it->second;
+         // ProfileCompilationInfo newinfo = *(profile_cache_tmp->second);
+          if((cached_info->GetNumberOfMethods() > options_.GetMinMethodsToSave())
+            || (cached_info->GetNumberOfResolvedClasses() > options_.GetMinClassesToSave())) {
+              needclear = true;
+              VLOG(profiler)  << "startup new need clear preinfo";
+          }
+
+      }
+
+
+      if(needclear) {
+          std::string error;
+          int flags = O_WRONLY | O_NOFOLLOW | O_CLOEXEC;
+          ScopedFlock profile_file = LockedFile::Open(filename.c_str(), flags,
+                                              /*block*/false, &error);
+          if (profile_file.get() != nullptr) {
+              // We need to clear the data because we don't support appending to the profiles yet.
+              if (!profile_file->Erase()) {
+              LOG(WARNING) << "startup-Could not erase profile file: " << filename;
+            }
+              VLOG(profiler) << "startup-erase " << filename;
+          } else {
+              LOG(WARNING) << "startup-Couldn't lock the profile file " << filename << ": " << error;
+          }
+
+      }
+   }
+    /*end*/
+
+
+
+
+
 
     std::vector<ProfileMethodInfo> profile_methods;
     {
@@ -1121,7 +1201,7 @@ void ProfileSaver::Stop(bool dump_info) {
   profile_saver->ProcessProfilingInfo(
       /*force_ save=*/ true,
       /*skip_class_and_method_fetching=*/ false,
-      /*number_of_new_methods=*/ nullptr);
+      /*number_of_new_methods=*/ nullptr,false);
 
   // Wait for the saver thread to stop.
   CHECK_PTHREAD_CALL(pthread_join, (profiler_pthread, nullptr), "profile saver thread shutdown");
@@ -1243,7 +1323,7 @@ void ProfileSaver::ForceProcessProfiles() {
     saver->ProcessProfilingInfo(
         /*force_save=*/ true,
         /*skip_class_and_method_fetching=*/ false,
-        /*number_of_new_methods=*/ nullptr);
+        /*number_of_new_methods=*/ nullptr,false);
   }
 }
 

@@ -360,6 +360,20 @@ static void VMRuntime_runHeapTasks(JNIEnv* env, jobject) {
   Runtime::Current()->GetHeap()->GetTaskProcessor()->RunAllTasks(ThreadForEnv(env));
 }
 
+static void VMRuntime_setVerifierEnabled(JNIEnv*, jobject, jboolean enabled) {
+  Runtime* runtime = Runtime::Current();
+  if (enabled) {
+    runtime->EnableVerifier();
+  } else {
+    runtime->DisableVerifier();
+  }
+}
+
+static jboolean VMRuntime_getVerifierEnabled(JNIEnv*, jobject) {
+  Runtime* runtime = Runtime::Current();
+  return runtime->IsVerificationEnabled() ? JNI_TRUE : JNI_FALSE;
+}
+
 static void VMRuntime_preloadDexCaches(JNIEnv* env ATTRIBUTE_UNUSED, jobject) {
 }
 
@@ -445,6 +459,16 @@ static void VMRuntime_setDedupeHiddenApiWarnings(JNIEnv* env ATTRIBUTE_UNUSED,
                                                  jboolean dedupe) {
   Runtime::Current()->SetDedupeHiddenApiWarnings(dedupe);
 }
+
+/*AW_code;add launch-mode for vmruntime;jiangbin;191018*/
+static void VMRuntime_setHeapLaunchMode(JNIEnv* env ATTRIBUTE_UNUSED,
+                                                 jclass klass ATTRIBUTE_UNUSED,
+                                                 jboolean islaunchmode) {
+  Runtime::Current()->GetHeap()->SetHeapLaunchMode(islaunchmode);
+}
+/*end*/
+
+
 
 static void VMRuntime_setProcessPackageName(JNIEnv* env,
                                             jclass klass ATTRIBUTE_UNUSED,
@@ -542,6 +566,8 @@ static JNINativeMethod gMethods[] = {
   NATIVE_METHOD(VMRuntime, vmInstructionSet, "()Ljava/lang/String;"),
   FAST_NATIVE_METHOD(VMRuntime, is64Bit, "()Z"),
   FAST_NATIVE_METHOD(VMRuntime, isCheckJniEnabled, "()Z"),
+  NATIVE_METHOD(VMRuntime, setVerifierEnabled, "(Z)V"),
+  NATIVE_METHOD(VMRuntime, getVerifierEnabled, "()Z"),
   NATIVE_METHOD(VMRuntime, preloadDexCaches, "()V"),
   NATIVE_METHOD(VMRuntime, registerAppInfo,
       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;I)V"),
@@ -554,6 +580,10 @@ static JNINativeMethod gMethods[] = {
   NATIVE_METHOD(VMRuntime, bootCompleted, "()V"),
   NATIVE_METHOD(VMRuntime, resetJitCounters, "()V"),
   NATIVE_METHOD(VMRuntime, isValidClassLoaderContext, "(Ljava/lang/String;)Z"),
+  /*AW_code;add launch-mode for vmruntime;jiangbin;191018*/
+  NATIVE_METHOD(VMRuntime, setHeapLaunchMode, "(Z)V"),
+  /*end*/
+
 };
 
 void register_dalvik_system_VMRuntime(JNIEnv* env) {

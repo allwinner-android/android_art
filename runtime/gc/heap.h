@@ -777,6 +777,29 @@ class Heap {
     return !boot_image_spaces_.empty();
   }
 
+
+  /*AW_code;add launch-mode control;jiangbin;191018*/
+  bool IsLaunchMode = false;
+  bool HeapGrowthLimit;
+  bool NeedRestGrowthLimit = false;
+  bool NeedJavaGCTask = false;
+  bool NeedNativeGCTask = false;
+
+  void SetNeedJavaGCTask(bool needGC) {
+   NeedJavaGCTask = needGC;
+  }
+  void SetNeedNativeGCTask(bool needGC) {
+   NeedNativeGCTask = needGC;
+  }
+ void SetHeapLaunchMode(bool islaunchmode);
+
+  bool GetHeapLaunchMode() {
+    return IsLaunchMode;
+  }
+  /*end*/
+
+
+
   ReferenceProcessor* GetReferenceProcessor() {
     return reference_processor_.get();
   }
@@ -1030,6 +1053,10 @@ class Heap {
   float NativeMemoryOverTarget(size_t current_native_bytes, bool is_gc_concurrent);
   void CheckGCForNative(Thread* self)
       REQUIRES(!*pending_task_lock_, !*gc_complete_lock_, !process_state_update_lock_);
+
+
+  ALWAYS_INLINE bool CheckCanConcurrentGC(size_t new_num_bytes_allocated);//jiangbin
+
 
   accounting::ObjectStack* GetMarkStack() {
     return mark_stack_.get();

@@ -3663,6 +3663,8 @@ void Heap::ClampGrowthLimit() {
   if (main_space_backup_.get() != nullptr) {
     main_space_backup_->ClampGrowthLimit();
   }
+  HeapGrowthLimit = true;//AW_code;jiangbin
+
 }
 
 void Heap::ClearGrowthLimit() {
@@ -3686,6 +3688,8 @@ void Heap::ClearGrowthLimit() {
     main_space_backup_->ClearGrowthLimit();
     main_space_backup_->SetFootprintLimit(main_space_backup_->Capacity());
   }
+  HeapGrowthLimit = false;//AW_code;jiangbin
+
 }
 
 void Heap::AddFinalizerReference(Thread* self, ObjPtr<mirror::Object>* object) {
@@ -3759,6 +3763,32 @@ bool Heap::RequestConcurrentGC(Thread* self,
 
 void Heap::ConcurrentGC(Thread* self, GcCause cause, bool force_full, uint32_t requested_gc_num) {
   if (!Runtime::Current()->IsShuttingDown(self)) {
+
+    /*AW_code;reset launchmode needgc flag if need;jiangbin;191127*/
+
+       VLOG(heap)<<"ConcurrentGC "<< GetHeapLaunchMode() << " "<<NeedJavaGCTask << " "<<NeedNativeGCTask;
+      if(cause ==  kGcCauseBackground) {
+         if(GetHeapLaunchMode()) {
+            SetNeedJavaGCTask(true);
+            return;
+         } else if(NeedJavaGCTask) {
+            NeedJavaGCTask = false;
+         }
+      }
+#if 0  // reseve one version only for low_ram device
+      if(cause ==  kGcCauseForNativeAlloc) {
+         if(GetHeapLaunchMode()) {
+            SetNeedNativeGCTask(true);
+            return;
+         } else if(NeedNativeGCTask) {
+            NeedNativeGCTask = false;
+         }
+
+      }
+#endif
+    /*end*/
+
+
     // Wait for any GCs currently running to finish. If this incremented GC number, we're done.
     WaitForGcToComplete(cause, self);
     if (GCNumberLt(GetCurrentGcNum(), requested_gc_num)) {
@@ -3985,7 +4015,16 @@ inline void Heap::CheckGCForNative(Thread* self) {
   float gc_urgency = NativeMemoryOverTarget(current_native_bytes, is_gc_concurrent);
   if (UNLIKELY(gc_urgency >= 1.0)) {
     if (is_gc_concurrent) {
-      bool requested =
+
+#if 0  // becase unknown-error ,reseve one version only for low_ram device
+      /*AW_code;for performance check in launchmode;jiangbin;191026*/
+      if(!CheckCanConcurrentGC(GetBytesAllocated())) {
+        SetNeedNativeGCTask(true);
+        return;
+      }
+      /*end*/
+#endif
+        bool requested =
           RequestConcurrentGC(self, kGcCauseForNativeAlloc, /*force_full=*/true, starting_gc_num);
       if (gc_urgency > kStopForNativeFactor
           && current_native_bytes > stop_for_native_allocs_) {
@@ -4442,6 +4481,25 @@ class Heap::TriggerPostForkCCGcTask : public HeapTask {
   explicit TriggerPostForkCCGcTask(uint64_t target_time) : HeapTask(target_time) {}
   void Run(Thread* self) override {
     gc::Heap* heap = Runtime::Current()->GetHeap();
+
+    /*AW_code;trigger a launchmode cc-gc if need;jiangbin;210819*/
+    VLOG(heap)<<"TriggerPostForkCCGcTask "<< heap->GetHeapLaunchMode() << " "<<heap->NeedJavaGCTask << " "<<heap->NeedNativeGCTask;
+
+    if((!heap->GetHeapLaunchMode()) && (heap->NeedJavaGCTask || heap->NeedNativeGCTask)) {
+        if(heap->NeedJavaGCTask) {
+            heap->RequestConcurrentGC(self, kGcCauseBackground, false,heap->GetCurrentGcNum());
+        }
+
+#if 1  // maybe some unknown-error ,reseve one version only for low_ram device
+        if(heap->NeedNativeGCTask) {
+            heap->RequestConcurrentGC(self, kGcCauseForNativeAlloc, /*force_full=*/false,heap->GetCurrentGcNum());
+        }
+        return;
+#endif
+    }
+   /*end*/
+
+
     // Trigger a GC, if not already done. The first GC after fork, whenever it
     // takes place, will adjust the thresholds to normal levels.
     if (heap->target_footprint_.load(std::memory_order_relaxed) == heap->growth_limit_) {
@@ -4495,6 +4553,36 @@ bool Heap::AddHeapTask(gc::HeapTask* task) {
   GetTaskProcessor()->AddTask(self, task);
   return true;
 }
+/*AW_code;set launchmode interface for app_start_performance;jiangbin;191018*/
+void Heap::SetHeapLaunchMode(bool islaunchmode) {
+    if(IsLaunchMode != islaunchmode) {
+        IsLaunchMode = islaunchmode;
+        if(IsLaunchMode) { //launch-mode
+
+            if(HeapGrowthLimit) {
+                NeedRestGrowthLimit = true;
+                ClearGrowthLimit();
+            }
+            VLOG(heap)<< "Heap::SetHeapLaunchMode open  allocated= " << GetBytesAllocated() << " islimit= "<< HeapGrowthLimit
+            << " gc_start= "<<concurrent_start_bytes_ << " limit= "<< growth_limit_  ;
+
+        } else {          //normal-mode
+            if(NeedRestGrowthLimit) {
+                ClampGrowthLimit();
+                NeedRestGrowthLimit = false;
+            }
+
+            VLOG(heap)<< "Heap::SetHeapLaunchMode close allocate=  " << GetBytesAllocated()
+                << " "<<NeedJavaGCTask<< " "<< NeedNativeGCTask ;
+            if(NeedJavaGCTask || NeedNativeGCTask) {
+                GetTaskProcessor()->AddTask( Thread::Current(), new TriggerPostForkCCGcTask(NanoTime()
+                + MsToNs(10000/*5 seconds to CC-GC*//*kPostForkMaxHeapDurationMS*/)));
+            }
+    }
+  }
+}
+
+
 
 }  // namespace gc
 }  // namespace art
